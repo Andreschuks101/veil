@@ -1,0 +1,28 @@
+{
+  "name": "invisible-wallet-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for Invisible Wallet (Soroban + WebAuthn)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "keywords": [
+    "stellar",
+    "soroban",
+    "webauthn",
+    "passkeys",
+    "wallet"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "stellar-sdk": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.2.14",
+    "typescript": "^5.0.0"
+  }
+}
