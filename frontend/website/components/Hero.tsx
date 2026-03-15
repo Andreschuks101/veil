@@ -106,7 +106,7 @@ export default function Hero() {
           transition={{ duration: 0.7, delay: 1.75 }}
           className="flex flex-col sm:flex-row gap-3 justify-center items-center"
         >
-          <a href="/docs">
+          <a href="https://veil-2ap8.vercel.app">
             <motion.button
               whileHover={{ scale: 1.03, boxShadow: '0 0 28px rgba(5,162,194,0.22)' }}
               whileTap={{ scale: 0.97 }}
@@ -117,7 +117,7 @@ export default function Hero() {
             </motion.button>
           </a>
           <a
-            href="https://github.com/stellar/invisible-wallet"
+            href="https://github.com/Miracle656/veil"
             target="_blank"
             rel="noopener noreferrer"
           >

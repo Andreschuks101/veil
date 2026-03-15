@@ -1,7 +1,7 @@
 const LINKS = {
   Project: [
-    { label: 'Documentation', href: '/docs' },
-    { label: 'GitHub',        href: 'https://github.com/stellar/invisible-wallet' },
+    { label: 'Documentation', href: 'https://veil-2ap8.vercel.app' },
+    { label: 'GitHub',        href: 'https://github.com/Miracle656/veil' },
     { label: 'Roadmap',       href: '#roadmap' },
     { label: 'Changelog',     href: '#' },
   ],
@@ -13,8 +13,8 @@ const LINKS = {
   ],
   Community: [
     { label: 'Stellar Discord', href: 'https://discord.gg/stellardev' },
-    { label: 'Open Issues',     href: 'https://github.com/stellar/invisible-wallet/issues' },
-    { label: 'Contributing',    href: '/docs/contributing' },
+    { label: 'Open Issues',     href: 'https://github.com/Miracle656/veil/issues' },
+    { label: 'Contributing',    href: 'https://veil-2ap8.vercel.app/getting-started' },
     { label: 'Twitter / X',     href: '#' },
   ],
 }

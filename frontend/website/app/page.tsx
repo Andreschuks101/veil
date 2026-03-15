@@ -59,7 +59,7 @@ function Navbar() {
 
         {/* Desktop CTAs */}
         <div className="hidden md:flex items-center gap-2.5">
-          <a href="/docs" className="font-inter text-sm text-warm-grey hover:text-off-white transition-colors px-3 py-1.5">
+          <a href="https://veil-2ap8.vercel.app" className="font-inter text-sm text-warm-grey hover:text-off-white transition-colors px-3 py-1.5">
             Docs
           </a>
           <a href="#early-access" className="btn-gold !py-2 !px-5 !text-sm">
@@ -154,7 +154,7 @@ function Hero() {
           className="flex flex-col sm:flex-row gap-3 justify-center items-center"
         >
           <a href="#early-access" className="btn-gold">Get Early Access</a>
-          <a href="/docs"         className="btn-ghost">Read the Docs</a>
+          <a href="https://veil-2ap8.vercel.app"         className="btn-ghost">Read the Docs</a>
         </motion.div>
 
         {/* Built-on-Stellar badge */}
@@ -417,7 +417,7 @@ function DevQuickstart() {
           {/* Gold doc link */}
           <motion.a
             variants={fadeUp}
-            href="/docs"
+            href="https://veil-2ap8.vercel.app"
             className="inline-flex items-center gap-2 mt-8 font-inter font-semibold text-near-black text-sm hover:text-navy transition-colors"
           >
             <span className="hl-dark">View full docs</span>
@@ -578,8 +578,8 @@ function EarlyAccess() {
 ════════════════════════════════════════════════════════════════════════ */
 function Footer() {
   const links = [
-    { label: 'Docs',        href: '/docs' },
-    { label: 'GitHub',      href: 'https://github.com/stellar/invisible-wallet' },
+    { label: 'Docs',        href: 'https://veil-2ap8.vercel.app' },
+    { label: 'GitHub',      href: 'https://github.com/Miracle656/veil' },
     { label: 'Twitter / X', href: '#' },
     { label: 'Stellar.org', href: 'https://stellar.org' },
   ]

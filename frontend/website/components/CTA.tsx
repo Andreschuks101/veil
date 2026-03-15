@@ -48,7 +48,7 @@ export default function CTA() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <a href="/docs">
+            <a href="https://veil-2ap8.vercel.app">
               <motion.button
                 whileHover={{ scale: 1.04, boxShadow: '0 0 28px rgba(5,162,194,0.2)' }}
                 whileTap={{ scale: 0.97 }}
@@ -59,7 +59,7 @@ export default function CTA() {
               </motion.button>
             </a>
             <a
-              href="https://github.com/stellar/invisible-wallet"
+              href="https://github.com/Miracle656/veil"
               target="_blank"
               rel="noopener noreferrer"
             >

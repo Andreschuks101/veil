@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { label: 'How It Works', href: '#how-it-works' },
   { label: 'Features',     href: '#features' },
   { label: 'Roadmap',      href: '#roadmap' },
-  { label: 'Docs',         href: '/docs' },
+  { label: 'Docs',         href: 'https://veil-2ap8.vercel.app' },
 ]
 
 export default function Navbar() {
@@ -67,7 +67,7 @@ export default function Navbar() {
         {/* Desktop CTAs */}
         <div className="hidden md:flex items-center gap-2.5">
           <a
-            href="https://github.com/stellar/invisible-wallet"
+            href="https://github.com/Miracle656/veil"
             target="_blank"
             rel="noopener noreferrer"
             className="btn-secondary !py-2 !px-4 text-sm flex items-center gap-1.5"
@@ -75,7 +75,7 @@ export default function Navbar() {
             <GithubIcon size={15} />
             GitHub
           </a>
-          <a href="/docs" className="btn-primary !py-2 !px-4 text-sm">
+          <a href="https://veil-2ap8.vercel.app" className="btn-primary !py-2 !px-4 text-sm">
             Get Started
           </a>
         </div>
@@ -122,7 +122,7 @@ export default function Navbar() {
                 </a>
               ))}
               <div className="pt-2 flex flex-col gap-2">
-                <a href="/docs" className="btn-primary text-center justify-center">
+                <a href="https://veil-2ap8.vercel.app" className="btn-primary text-center justify-center">
                   Get Started
                 </a>
               </div>
