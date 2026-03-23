@@ -4,6 +4,7 @@ import {
     hexToUint8Array,
     derToRawSignature,
     extractP256PublicKey,
+    computeWalletAddress,
 } from './utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -25,13 +26,23 @@ export type WebAuthnSignature = {
     signature: Uint8Array;
 };
 
+/** Result returned by a successful register() call. */
+export type RegisterResult = {
+    /** The deterministically computed contract address of the new wallet ("C..."). */
+    walletAddress: string;
+};
+
 type InvisibleWallet = {
     /** Soroban contract address of the deployed wallet, or null if not yet registered. */
     address: string | null;
     isPending: boolean;
     error: string | null;
-    /** Create a new passkey credential and deploy a wallet (Phase 3: wires to factory contract). */
-    register: (username: string) => Promise<void>;
+    /**
+     * Create a new passkey credential and compute the deterministic wallet address.
+     * Returns the wallet address so callers can display or pre-fund it immediately.
+     * (Phase 3: will also wire to factory contract to deploy on-chain.)
+     */
+    register: (username: string) => Promise<RegisterResult>;
     /**
      * Sign a Soroban authorization entry using the stored passkey.
      *
@@ -45,7 +56,7 @@ type InvisibleWallet = {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useInvisibleWallet(_factoryAddress: string): InvisibleWallet {
+export function useInvisibleWallet(factoryAddress: string): InvisibleWallet {
     const [address, setAddress] = useState<string | null>(null);
     const [isPending, setIsPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -55,7 +66,7 @@ export function useInvisibleWallet(_factoryAddress: string): InvisibleWallet {
         if (stored) setAddress(stored);
     }, []);
 
-    const register = async (username: string) => {
+    const register = async (username: string): Promise<RegisterResult> => {
         setIsPending(true);
         setError(null);
         try {
@@ -88,19 +99,23 @@ export function useInvisibleWallet(_factoryAddress: string): InvisibleWallet {
             const publicKeyBytes = await extractP256PublicKey(response);
             const publicKeyHex = bufferToHex(publicKeyBytes);
 
-            // TODO (Phase 3): Deploy wallet via the factory contract using publicKeyHex.
-            //   const walletAddress = await factoryContract.deploy(publicKeyHex, salt);
-            // Wallet address is deterministic (derived from pubkey) so users can recover.
-            const newAddress = 'C_MOCK_WALLET_' +
-                bufferToHex(crypto.getRandomValues(new Uint8Array(8)).buffer);
+            // Compute the deterministic wallet address from the factory + public key.
+            // This matches the address the factory contract will assign on deployment,
+            // so the frontend can show it (or pre-fund it) before the tx lands.
+            // TODO (Phase 3): also call factoryContract.deploy(publicKeyHex) here.
+            const walletAddress = computeWalletAddress(factoryAddress, publicKeyBytes);
 
-            localStorage.setItem('invisible_wallet_address',   newAddress);
-            localStorage.setItem('invisible_wallet_key_id',    credential.id);
+            localStorage.setItem('invisible_wallet_address',    walletAddress);
+            localStorage.setItem('invisible_wallet_key_id',     credential.id);
             localStorage.setItem('invisible_wallet_public_key', publicKeyHex);
-            setAddress(newAddress);
+            setAddress(walletAddress);
+
+            return { walletAddress };
 
         } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : String(err));
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err; // re-throw so callers can handle it (e.g. show an error banner)
         } finally {
             setIsPending(false);
         }
