@@ -90,6 +90,10 @@ impl InvisibleWallet {
         auth::verify_webauthn(&env, &signature_payload, public_key, auth_data, client_data_json, sig_bytes)
     }
 
+    pub fn has_signer(env: Env, key: BytesN<65>) -> bool {
+        storage::has_signer(&env, &key)
+    }
+
     pub fn execute(env: Env, target: Address, func: Symbol, args: Vec<Val>) {
         env.current_contract_address().require_auth();
         env.invoke_contract::<Val>(&target, &func, args);
