@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "invisible_wallet",
+    "factory",
+]
+resolver = "2"
