@@ -2,11 +2,11 @@
 use soroban_sdk::{
     contract, contractimpl, contracterror,
     Env, Address, Bytes, BytesN, Vec, Symbol, Val,
-    auth::Context, FromVal, TryIntoVal,
-};
+    auth::Context, FromVal, TryIntoVal, symbol_short};
 
 mod auth;
 mod storage;
+use storage::{DataKey, PendingRecovery};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -152,12 +152,32 @@ impl InvisibleWallet {
         env.current_contract_address().require_auth();
         env.invoke_contract::<Val>(&target, &func, args);
     }
+
+    /// Set or update the guardian address for this wallet.
+    ///
+    /// Only callable by the current wallet signer (authenticated via __check_auth).
+    /// The guardian is authorized to initiate key recovery if the signer key is lost.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment handle.
+    /// * `guardian` - The `Address` of the new guardian.
+    pub fn set_guardian(env: Env, guardian: Address) {
+        // Require that the contract itself (i.e. the wallet signer) authorizes this call.
+        env.current_contract_address().require_auth();
+
+        env.storage().persistent().set(&DataKey::Guardian, &guardian);
+
+        env.events().publish(
+            (symbol_short!("guardian"), symbol_short!("set")),
+            guardian,
+        );
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Env, Bytes, BytesN};
+    use soroban_sdk::{Env, Bytes, BytesN, symbol_short};
     use sha2::{Sha256, Digest};
     use p256::ecdsa::{SigningKey, Signature as P256Sig, signature::hazmat::PrehashSigner};
 
