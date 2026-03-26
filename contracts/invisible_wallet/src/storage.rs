@@ -1,5 +1,13 @@
-use soroban_sdk::{contracttype, Bytes, Env, BytesN};
+﻿use soroban_sdk::{contracttype, Bytes, Env, BytesN};
 
+
+/// Stores details of a pending guardian recovery request.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingRecovery {
+    pub new_public_key: BytesN<65>,
+    pub recovery_unlock_time: u64,
+}
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -13,7 +21,7 @@ pub enum DataKey {
     Origin,
 }
 
-// ── Signer ────────────────────────────────────────────────────────────────────
+// â”€â”€ Signer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub fn add_signer(env: &Env, key: &BytesN<65>) {
     env.storage().persistent().set(&DataKey::Signer(key.clone()), &());
@@ -27,7 +35,7 @@ pub fn has_signer(env: &Env, key: &BytesN<65>) -> bool {
     env.storage().persistent().has(&DataKey::Signer(key.clone()))
 }
 
-// ── Guardian ──────────────────────────────────────────────────────────────────
+// â”€â”€ Guardian â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub fn set_guardian(env: &Env, guardian_key: &BytesN<65>) {
     env.storage().instance().set(&DataKey::Guardian, guardian_key);
@@ -37,7 +45,7 @@ pub fn get_guardian(env: &Env) -> Option<BytesN<65>> {
     env.storage().instance().get(&DataKey::Guardian)
 }
 
-// ── RP ID ─────────────────────────────────────────────────────────────────────
+// â”€â”€ RP ID â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Persist the relying party ID (e.g. "localhost" for dev, "veil.app" for prod).
 pub fn set_rp_id(env: &Env, rp_id: &Bytes) {
@@ -49,7 +57,7 @@ pub fn get_rp_id(env: &Env) -> Option<Bytes> {
     env.storage().instance().get(&DataKey::RpId)
 }
 
-// ── Origin ────────────────────────────────────────────────────────────────────
+// â”€â”€ Origin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Persist the expected WebAuthn origin (e.g. "https://veil.app").
 pub fn set_origin(env: &Env, origin: &Bytes) {
