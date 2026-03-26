@@ -2,7 +2,7 @@
 use soroban_sdk::{
     contract, contractimpl, contracterror,
     Env, Address, Bytes, BytesN, Vec, Symbol, Val,
-    auth::Context, FromVal, TryIntoVal, symbol_short};
+    auth::Context, FromVal, TryIntoVal, symbol_short, Map};
 
 mod auth;
 mod storage;
@@ -222,12 +222,78 @@ impl InvisibleWallet {
 
         Ok(())
     }
+
+    /// Complete a pending guardian recovery after the timelock has expired.
+    ///
+    /// This function is permissionless - anyone can call it once the timelock
+    /// has expired. It replaces the wallet signer with the new public key
+    /// that was specified during `initiate_recovery`.
+    ///
+    /// # Errors
+    /// * `WalletError::RecoveryNotPending` - if no recovery has been initiated.
+    /// * `WalletError::RecoveryTimelockActive` - if the timelock has not yet expired.
+    pub fn complete_recovery(env: Env) -> Result<(), WalletError> {
+        // Retrieve pending recovery
+        let pending: PendingRecovery = env.storage()
+            .persistent()
+            .get(&DataKey::RecoveryPending)
+            .ok_or(WalletError::RecoveryNotPending)?;
+
+        // Verify timelock has expired
+        if env.ledger().timestamp() < pending.recovery_unlock_time {
+            return Err(WalletError::RecoveryTimelockActive);
+        }
+
+        // Replace the signer: store the new public key as the active signer
+        env.storage().persistent().set(
+            &DataKey::Signer,
+            &pending.new_public_key,
+        );
+
+        // Clear the pending recovery
+        env.storage().persistent().remove(&DataKey::RecoveryPending);
+
+        env.events().publish(
+            (symbol_short!("recovery"), symbol_short!("done")),
+            pending.new_public_key,
+        );
+
+        Ok(())
+    }
+
+    /// Cancel a pending guardian recovery.
+    ///
+    /// Only callable by the current wallet signer (the contract itself must
+    /// authorize). This allows a wallet owner who still has their key to
+    /// abort an unwanted or malicious recovery attempt.
+    ///
+    /// # Errors
+    /// * `WalletError::RecoveryNotPending` - if no recovery has been initiated.
+    pub fn cancel_recovery(env: Env) -> Result<(), WalletError> {
+        // Require current signer authorization
+        env.current_contract_address().require_auth();
+
+        // Verify a recovery is actually pending
+        if !env.storage().persistent().has(&DataKey::RecoveryPending) {
+            return Err(WalletError::RecoveryNotPending);
+        }
+
+        // Remove the pending recovery
+        env.storage().persistent().remove(&DataKey::RecoveryPending);
+
+        env.events().publish(
+            (symbol_short!("recovery"), symbol_short!("cancel")),
+            (),
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Env, Bytes, BytesN, symbol_short};
+    use soroban_sdk::{Env, Bytes, BytesN, symbol_short, Map};
     use sha2::{Sha256, Digest};
     use p256::ecdsa::{SigningKey, Signature as P256Sig, signature::hazmat::PrehashSigner};
 
