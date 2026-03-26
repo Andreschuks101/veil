@@ -8,6 +8,10 @@ mod auth;
 mod storage;
 use storage::{DataKey, PendingRecovery};
 
+/// Recovery timelock duration: 3 days in seconds.
+const RECOVERY_DELAY_SECONDS: u64 = 259_200;
+
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -171,6 +175,52 @@ impl InvisibleWallet {
             (symbol_short!("guardian"), symbol_short!("set")),
             guardian,
         );
+    }
+
+    /// Initiate a guardian recovery to replace the wallet signer key.
+    ///
+    /// Only callable by the designated guardian. Records the new public key
+    /// and starts a timelock countdown. After the timelock expires,
+    /// `complete_recovery` can be called to finalize the key replacement.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment handle.
+    /// * `new_public_key` - The 65-byte uncompressed public key of the new signer.
+    ///
+    /// # Errors
+    /// * `WalletError::NoGuardianSet` - if no guardian has been configured.
+    /// * `WalletError::RecoveryAlreadyPending` - if a recovery is already in progress.
+    pub fn initiate_recovery(env: Env, new_public_key: BytesN<65>) -> Result<(), WalletError> {
+        // Verify a guardian is set
+        let guardian: Address = env.storage()
+            .persistent()
+            .get(&DataKey::Guardian)
+            .ok_or(WalletError::NoGuardianSet)?;
+
+        // Require guardian authorization
+        guardian.require_auth();
+
+        // Prevent overwriting an existing pending recovery
+        if env.storage().persistent().has(&DataKey::RecoveryPending) {
+            return Err(WalletError::RecoveryAlreadyPending);
+        }
+
+        // Calculate unlock time: current ledger timestamp + 3 day delay
+        let recovery_unlock_time = env.ledger().timestamp() + RECOVERY_DELAY_SECONDS;
+
+        let pending = PendingRecovery {
+            new_public_key: new_public_key.clone(),
+            recovery_unlock_time,
+        };
+
+        env.storage().persistent().set(&DataKey::RecoveryPending, &pending);
+
+        env.events().publish(
+            (symbol_short!("recovery"), symbol_short!("init")),
+            (new_public_key, recovery_unlock_time),
+        );
+
+        Ok(())
     }
 }
 
