@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
+    Account,
     Contract,
     Keypair,
     SorobanRpc,
@@ -7,6 +8,7 @@ import {
     BASE_FEE,
     xdr,
     nativeToScVal,
+    scValToNative,
 } from 'stellar-sdk';
 import {
     bufferToHex,
@@ -63,6 +65,12 @@ export type DeployResult = {
     alreadyDeployed: boolean;
 };
 
+/** Result returned by a successful addSigner() call. */
+export type AddSignerResult = {
+    /** The index of the newly added signer in the wallet's signer list. */
+    signerIndex: number;
+};
+
 type InvisibleWallet = {
     /** Soroban contract address of the deployed wallet, or null if not yet registered. */
     address: string | null;
@@ -98,6 +106,30 @@ type InvisibleWallet = {
      * Verifies that the wallet contract actually exists on-chain before setting the address.
      */
     login: () => Promise<void>;
+    /**
+     * Read the wallet contract's current nonce without submitting a transaction.
+     * Uses `server.simulateTransaction` to invoke `get_nonce` in read-only mode.
+     *
+     * @returns The current nonce as a bigint.
+     */
+    getNonce: () => Promise<bigint>;
+    /**
+     * Register an additional P-256 public key as a valid signer on the wallet contract.
+     * Follows the simulate → build → sign → submit → poll pattern.
+     *
+     * @param signerKeypair    The Stellar Keypair used as the transaction fee source.
+     * @param newPublicKeyBytes The uncompressed P-256 public key (65 bytes) to add.
+     * @returns The index of the newly added signer.
+     */
+    addSigner: (signerKeypair: Keypair, newPublicKeyBytes: Uint8Array) => Promise<AddSignerResult>;
+    /**
+     * Remove a signer from the wallet contract by index.
+     * Follows the simulate → build → sign → submit → poll pattern.
+     *
+     * @param signerKeypair The Stellar Keypair used as the transaction fee source.
+     * @param signerIndex   The index of the signer to remove.
+     */
+    removeSigner: (signerKeypair: Keypair, signerIndex: number) => Promise<void>;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -387,5 +419,190 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         }
     };
 
-    return { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login };
+    // ── getNonce ──────────────────────────────────────────────────────────────
+
+    /**
+     * Read the wallet contract's current nonce via simulation (read-only).
+     * Does NOT submit a transaction.
+     */
+    const getNonce = async (): Promise<bigint> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+
+            // For read-only simulation we need a source account but never submit,
+            // so a synthetic account with sequence "0" is sufficient.
+            const dummyKeypair = Keypair.random();
+            const sourceAccount = new Account(dummyKeypair.publicKey(), '0');
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(walletContract.call('get_nonce'))
+                .setTimeout(30)
+                .build();
+
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                throw new Error(`Simulation failed: ${sim.error}`);
+            }
+
+            const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
+            if (!result) throw new Error('Simulation returned no result');
+
+            const nonce = scValToNative(result.retval) as bigint;
+            return nonce;
+
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    // ── addSigner ─────────────────────────────────────────────────────────────
+
+    /**
+     * Register an additional P-256 public key as a valid signer on the wallet.
+     * Follows: simulate → build → sign → submit → poll.
+     */
+    const addSigner = async (
+        signerKeypair: Keypair,
+        newPublicKeyBytes: Uint8Array
+    ): Promise<AddSignerResult> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+            if (newPublicKeyBytes.length !== 65) {
+                throw new Error('newPublicKeyBytes must be exactly 65 bytes (uncompressed P-256)');
+            }
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+            const sourceAccount = await server.getAccount(signerKeypair.publicKey());
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(
+                    walletContract.call(
+                        'add_signer',
+                        nativeToScVal(newPublicKeyBytes, { type: 'bytes' })
+                    )
+                )
+                .setTimeout(30)
+                .build();
+
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                throw new Error(`Simulation failed: ${sim.error}`);
+            }
+
+            const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+            assembled.sign(signerKeypair);
+
+            const sendResult = await server.sendTransaction(assembled);
+            if (sendResult.status === 'ERROR') {
+                throw new Error(
+                    `Transaction rejected: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown error'}`
+                );
+            }
+
+            const txResult = await waitForTransaction(server, sendResult.hash);
+            if (txResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+                throw new Error(`Transaction failed with status: ${txResult.status}`);
+            }
+
+            // Extract signer index from the return value if available
+            let signerIndex = 0;
+            if ('returnValue' in txResult && txResult.returnValue) {
+                try {
+                    signerIndex = scValToNative(txResult.returnValue) as number;
+                } catch {
+                    // Contract may not return an index — default to 0
+                }
+            }
+
+            return { signerIndex };
+
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    // ── removeSigner ──────────────────────────────────────────────────────────
+
+    /**
+     * Remove a signer from the wallet contract by index.
+     * Follows: simulate → build → sign → submit → poll.
+     */
+    const removeSigner = async (
+        signerKeypair: Keypair,
+        signerIndex: number
+    ): Promise<void> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+            const sourceAccount = await server.getAccount(signerKeypair.publicKey());
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(
+                    walletContract.call(
+                        'remove_signer',
+                        nativeToScVal(signerIndex, { type: 'u32' })
+                    )
+                )
+                .setTimeout(30)
+                .build();
+
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                throw new Error(`Simulation failed: ${sim.error}`);
+            }
+
+            const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+            assembled.sign(signerKeypair);
+
+            const sendResult = await server.sendTransaction(assembled);
+            if (sendResult.status === 'ERROR') {
+                throw new Error(
+                    `Transaction rejected: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown error'}`
+                );
+            }
+
+            const txResult = await waitForTransaction(server, sendResult.hash);
+            if (txResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+                throw new Error(`Transaction failed with status: ${txResult.status}`);
+            }
+
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    return { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner };
 }
