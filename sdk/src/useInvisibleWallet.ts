@@ -4,6 +4,7 @@ import {
     Contract,
     Keypair,
     SorobanRpc,
+    StrKey,
     TransactionBuilder,
     BASE_FEE,
     xdr,
@@ -71,6 +72,39 @@ export type AddSignerResult = {
     signerIndex: number;
 };
 
+/** Result returned by a successful initiateRecovery() call. */
+export type InitiateRecoveryResult = {
+    /** Unix timestamp (seconds) after which completeRecovery() can be called. */
+    unlockTime: number;
+};
+
+// ── Recovery Errors ───────────────────────────────────────────────────────────
+
+/** Thrown when completeRecovery() is called before the timelock has expired. */
+export class RecoveryTimelockActive extends Error {
+    constructor(public readonly unlockTime: number) {
+        super(`Recovery timelock active until ${unlockTime}`);
+        this.name = 'RecoveryTimelockActive';
+    }
+}
+
+/** Thrown when recovery methods are called but no guardian has been set. */
+export class NoGuardianSet extends Error {
+    constructor() {
+        super('No guardian set on this wallet');
+        this.name = 'NoGuardianSet';
+    }
+}
+
+/** Thrown when completeRecovery() is called but no recovery is in progress. */
+export class RecoveryNotPending extends Error {
+    constructor() {
+        super('No recovery is currently pending');
+        this.name = 'RecoveryNotPending';
+    }
+}
+
+
 type InvisibleWallet = {
     /** Soroban contract address of the deployed wallet, or null if not yet registered. */
     address: string | null;
@@ -130,6 +164,34 @@ type InvisibleWallet = {
      * @param signerIndex   The index of the signer to remove.
      */
     removeSigner: (signerKeypair: Keypair, signerIndex: number) => Promise<void>;
+    /**
+     * Set a guardian address that can initiate key recovery for this wallet.
+     * Requires WebAuthn authentication — builds an auth entry, signs it with the
+     * stored passkey, and submits the transaction.
+     *
+     * @param signerKeypair   Stellar Keypair used as the transaction fee source.
+     * @param guardianAddress Stellar address (G...) of the guardian account.
+     */
+    setGuardian: (signerKeypair: Keypair, guardianAddress: string) => Promise<void>;
+    /**
+     * Initiate guardian-based key recovery. Replaces the wallet's signer after
+     * a timelock expires. Signed using the guardian's regular Stellar keypair.
+     *
+     * @param guardianKeypair  The guardian's Stellar Keypair.
+     * @param newPublicKeyBytes Uncompressed P-256 public key (65 bytes) of the new signer.
+     * @returns The unix timestamp after which completeRecovery() can be called.
+     * @throws {NoGuardianSet} If no guardian has been configured.
+     */
+    initiateRecovery: (guardianKeypair: Keypair, newPublicKeyBytes: Uint8Array) => Promise<InitiateRecoveryResult>;
+    /**
+     * Complete a pending guardian recovery after the timelock has expired.
+     * This is a permissionless call — any Stellar keypair can submit it.
+     *
+     * @param payerKeypair Any Stellar Keypair to pay the transaction fee.
+     * @throws {RecoveryTimelockActive} If the timelock has not yet expired.
+     * @throws {RecoveryNotPending}     If no recovery is in progress.
+     */
+    completeRecovery: (payerKeypair: Keypair) => Promise<void>;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -434,8 +496,6 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             const server = new SorobanRpc.Server(rpcUrl);
             const walletContract = new Contract(address);
 
-            // For read-only simulation we need a source account but never submit,
-            // so a synthetic account with sequence "0" is sufficient.
             const dummyKeypair = Keypair.random();
             const sourceAccount = new Account(dummyKeypair.publicKey(), '0');
 
@@ -522,7 +582,6 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                 throw new Error(`Transaction failed with status: ${txResult.status}`);
             }
 
-            // Extract signer index from the return value if available
             let signerIndex = 0;
             if ('returnValue' in txResult && txResult.returnValue) {
                 try {
@@ -604,5 +663,261 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         }
     };
 
-    return { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner };
+    // ── setGuardian ───────────────────────────────────────────────────────────
+
+    /**
+     * Set a guardian on the wallet contract. Requires WebAuthn authentication.
+     * Flow: build tx → simulate → generate auth entry → sign with passkey → submit.
+     */
+    const setGuardian = async (
+        signerKeypair: Keypair,
+        guardianAddress: string
+    ): Promise<void> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+            const sourceAccount = await server.getAccount(signerKeypair.publicKey());
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(
+                    walletContract.call(
+                        'set_guardian',
+                        nativeToScVal(guardianAddress, { type: 'address' })
+                    )
+                )
+                .setTimeout(30)
+                .build();
+
+            // Simulate to discover auth entries that need WebAuthn signing
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                throw new Error(`Simulation failed: ${sim.error}`);
+            }
+
+            const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+
+            // Sign auth entries that require the wallet's WebAuthn authorization.
+            const successSim = sim as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+            const authEntries = successSim.result?.auth;
+            if (authEntries) {
+                for (const parsed of authEntries) {
+                    const cred = parsed.credentials();
+                    if (cred.switch().value !== xdr.SorobanCredentialsType.sorobanCredentialsAddress().value) {
+                        continue;
+                    }
+
+                    const invocationXdr = parsed.rootInvocation().toXDR();
+                    const payloadHash = new Uint8Array(
+                        await crypto.subtle.digest('SHA-256', new Uint8Array(invocationXdr))
+                    );
+
+                    const webAuthnSig = await signAuthEntry(payloadHash);
+                    if (!webAuthnSig) throw new Error('WebAuthn signing was cancelled');
+
+                    const sigVec = xdr.ScVal.scvVec([
+                        nativeToScVal(webAuthnSig.publicKey, { type: 'bytes' }),
+                        nativeToScVal(webAuthnSig.authData, { type: 'bytes' }),
+                        nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
+                        nativeToScVal(webAuthnSig.signature, { type: 'bytes' }),
+                    ]);
+
+                    const addrCred = cred.address();
+                    parsed.credentials(
+                        xdr.SorobanCredentials.sorobanCredentialsAddress(
+                            new xdr.SorobanAddressCredentials({
+                                address: addrCred.address(),
+                                nonce: addrCred.nonce(),
+                                signatureExpirationLedger: addrCred.signatureExpirationLedger(),
+                                signature: sigVec,
+                            })
+                        )
+                    );
+                }
+            }
+
+            assembled.sign(signerKeypair);
+
+            const sendResult = await server.sendTransaction(assembled);
+            if (sendResult.status === 'ERROR') {
+                throw new Error(
+                    `Transaction rejected: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown error'}`
+                );
+            }
+
+            const txResult = await waitForTransaction(server, sendResult.hash);
+            if (txResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+                throw new Error(`Transaction failed with status: ${txResult.status}`);
+            }
+
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    // ── initiateRecovery ──────────────────────────────────────────────────────
+
+    /**
+     * Initiate guardian-based key recovery. Signed using the guardian's Stellar keypair.
+     * Uses standard Transaction.sign() — no WebAuthn required.
+     */
+    const initiateRecovery = async (
+        guardianKeypair: Keypair,
+        newPublicKeyBytes: Uint8Array
+    ): Promise<InitiateRecoveryResult> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+            if (newPublicKeyBytes.length !== 65) {
+                throw new Error('newPublicKeyBytes must be exactly 65 bytes (uncompressed P-256)');
+            }
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+            const sourceAccount = await server.getAccount(guardianKeypair.publicKey());
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(
+                    walletContract.call(
+                        'initiate_recovery',
+                        nativeToScVal(newPublicKeyBytes, { type: 'bytes' })
+                    )
+                )
+                .setTimeout(30)
+                .build();
+
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                const errMsg = sim.error ?? '';
+                if (errMsg.includes('NoGuardianSet') || errMsg.includes('no guardian')) {
+                    throw new NoGuardianSet();
+                }
+                throw new Error(`Simulation failed: ${errMsg}`);
+            }
+
+            const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+            assembled.sign(guardianKeypair);
+
+            const sendResult = await server.sendTransaction(assembled);
+            if (sendResult.status === 'ERROR') {
+                throw new Error(
+                    `Transaction rejected: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown error'}`
+                );
+            }
+
+            const txResult = await waitForTransaction(server, sendResult.hash);
+            if (txResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+                throw new Error(`Transaction failed with status: ${txResult.status}`);
+            }
+
+            // Extract unlock timestamp from the return value
+            let unlockTime = 0;
+            if ('returnValue' in txResult && txResult.returnValue) {
+                try {
+                    unlockTime = Number(scValToNative(txResult.returnValue));
+                } catch {
+                    // Default to 0 if parsing fails
+                }
+            }
+
+            return { unlockTime };
+
+        } catch (err: unknown) {
+            if (err instanceof NoGuardianSet) throw err;
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    // ── completeRecovery ──────────────────────────────────────────────────────
+
+    /**
+     * Complete a pending guardian recovery. Permissionless — any keypair can submit.
+     * Fails gracefully if the timelock has not expired or no recovery is pending.
+     */
+    const completeRecovery = async (payerKeypair: Keypair): Promise<void> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+            const sourceAccount = await server.getAccount(payerKeypair.publicKey());
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(walletContract.call('complete_recovery'))
+                .setTimeout(30)
+                .build();
+
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                const errMsg = sim.error ?? '';
+                if (errMsg.includes('TimelockActive') || errMsg.includes('timelock')) {
+                    // Try to extract unlock time from error metadata
+                    const match = errMsg.match(/(\d{10,})/);
+                    const unlockTime = match ? Number(match[1]) : 0;
+                    throw new RecoveryTimelockActive(unlockTime);
+                }
+                if (errMsg.includes('NoGuardianSet') || errMsg.includes('no guardian')) {
+                    throw new NoGuardianSet();
+                }
+                if (errMsg.includes('NotPending') || errMsg.includes('not pending')) {
+                    throw new RecoveryNotPending();
+                }
+                throw new Error(`Simulation failed: ${errMsg}`);
+            }
+
+            const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
+            assembled.sign(payerKeypair);
+
+            const sendResult = await server.sendTransaction(assembled);
+            if (sendResult.status === 'ERROR') {
+                throw new Error(
+                    `Transaction rejected: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown error'}`
+                );
+            }
+
+            const txResult = await waitForTransaction(server, sendResult.hash);
+            if (txResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+                throw new Error(`Transaction failed with status: ${txResult.status}`);
+            }
+
+        } catch (err: unknown) {
+            if (
+                err instanceof RecoveryTimelockActive ||
+                err instanceof NoGuardianSet ||
+                err instanceof RecoveryNotPending
+            ) {
+                throw err;
+            }
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    return { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, setGuardian, initiateRecovery, completeRecovery };
 }
