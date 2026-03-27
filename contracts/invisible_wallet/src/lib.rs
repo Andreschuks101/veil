@@ -1,12 +1,16 @@
-#![no_std]
+﻿#![no_std]
 use soroban_sdk::{
     contract, contractimpl, contracterror,
     Env, Address, Bytes, BytesN, Vec, Symbol, Val,
-    auth::Context, FromVal, TryIntoVal,
-};
+    auth::Context, FromVal, TryIntoVal, symbol_short, Map};
 
 mod auth;
 mod storage;
+use storage::{DataKey, PendingRecovery};
+
+/// Recovery timelock duration: 3 days in seconds.
+const RECOVERY_DELAY_SECONDS: u64 = 259_200;
+
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -34,11 +38,11 @@ pub struct InvisibleWallet;
 impl InvisibleWallet {
     /// Initialise the wallet with its first signer and domain-binding parameters.
     ///
-    /// `rp_id`   — the WebAuthn relying party ID (e.g. `"localhost"` for dev,
+    /// `rp_id`   â€” the WebAuthn relying party ID (e.g. `"localhost"` for dev,
     ///             `"veil.app"` for production). Must match the domain that
-    ///             serves the frontend. Keep it configurable — do not hardcode.
+    ///             serves the frontend. Keep it configurable â€” do not hardcode.
     ///
-    /// `origin`  — the exact WebAuthn origin (e.g. `"https://veil.app"`).
+    /// `origin`  â€” the exact WebAuthn origin (e.g. `"https://veil.app"`).
     ///             Must match the `origin` field the browser embeds in every
     ///             clientDataJSON for this deployment.
     pub fn init(
@@ -74,17 +78,17 @@ impl InvisibleWallet {
     /// Called by the Soroban runtime to authorize a transaction.
     ///
     /// The `signature` Val must encode a Vec<Val> with 4 elements:
-    ///   [0] BytesN<65>  — uncompressed P-256 public key (0x04 || x || y)
-    ///   [1] Bytes       — WebAuthn authenticatorData
-    ///   [2] Bytes       — WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
-    ///   [3] BytesN<64>  — raw P-256 ECDSA signature (r || s)
+    ///   [0] BytesN<65>  â€” uncompressed P-256 public key (0x04 || x || y)
+    ///   [1] Bytes       â€” WebAuthn authenticatorData
+    ///   [2] Bytes       â€” WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
+    ///   [3] BytesN<64>  â€” raw P-256 ECDSA signature (r || s)
     ///
     /// Verification order:
     ///   1. Parse and validate signature format
     ///   2. Check signer is registered
     ///   3. Verify ECDSA signature + challenge binding  (`verify_webauthn`)
-    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    → RpIdMismatch
-    ///   5. Verify origin binding                      (`verify_origin`)   → OriginMismatch
+    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    â†’ RpIdMismatch
+    ///   5. Verify origin binding                      (`verify_origin`)   â†’ OriginMismatch
     ///
     /// Steps 4 and 5 run after step 3 so that a bad domain does not produce
     /// a faster failure path than a bad signature (timing side-channel).
@@ -119,7 +123,7 @@ impl InvisibleWallet {
             return Err(WalletError::SignerNotAuthorized);
         }
 
-        // Step 3 — ECDSA + challenge verification.
+        // Step 3 â€” ECDSA + challenge verification.
         // Clone auth_data and client_data_json so they remain available for
         // the domain-binding checks below.
         auth::verify_webauthn(
@@ -131,12 +135,12 @@ impl InvisibleWallet {
             sig_bytes,
         )?;
 
-        // Step 4 — RP ID binding.
+        // Step 4 â€” RP ID binding.
         // Ensures auth_data[0..32] == SHA-256(stored rp_id).
         let rp_id = storage::get_rp_id(&env).ok_or(WalletError::RpIdMismatch)?;
         auth::verify_rp_id(&rp_id, &auth_data)?;
 
-        // Step 5 — Origin binding.
+        // Step 5 â€” Origin binding.
         // Ensures the "origin" field in clientDataJSON matches the stored origin.
         let origin = storage::get_origin(&env).ok_or(WalletError::OriginMismatch)?;
         auth::verify_origin(&client_data_json, &origin)?;
@@ -152,12 +156,144 @@ impl InvisibleWallet {
         env.current_contract_address().require_auth();
         env.invoke_contract::<Val>(&target, &func, args);
     }
+
+    /// Set or update the guardian address for this wallet.
+    ///
+    /// Only callable by the current wallet signer (authenticated via __check_auth).
+    /// The guardian is authorized to initiate key recovery if the signer key is lost.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment handle.
+    /// * `guardian` - The `Address` of the new guardian.
+    pub fn set_guardian(env: Env, guardian: Address) {
+        // Require that the contract itself (i.e. the wallet signer) authorizes this call.
+        env.current_contract_address().require_auth();
+
+        env.storage().persistent().set(&DataKey::Guardian, &guardian);
+
+        env.events().publish(
+            (symbol_short!("guardian"), symbol_short!("set")),
+            guardian,
+        );
+    }
+
+    /// Initiate a guardian recovery to replace the wallet signer key.
+    ///
+    /// Only callable by the designated guardian. Records the new public key
+    /// and starts a timelock countdown. After the timelock expires,
+    /// `complete_recovery` can be called to finalize the key replacement.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment handle.
+    /// * `new_public_key` - The 65-byte uncompressed public key of the new signer.
+    ///
+    /// # Errors
+    /// * `WalletError::NoGuardianSet` - if no guardian has been configured.
+    /// * `WalletError::RecoveryAlreadyPending` - if a recovery is already in progress.
+    pub fn initiate_recovery(env: Env, new_public_key: BytesN<65>) -> Result<(), WalletError> {
+        // Verify a guardian is set
+        let guardian: Address = env.storage()
+            .persistent()
+            .get(&DataKey::Guardian)
+            .ok_or(WalletError::NoGuardianSet)?;
+
+        // Require guardian authorization
+        guardian.require_auth();
+
+        // Prevent overwriting an existing pending recovery
+        if env.storage().persistent().has(&DataKey::RecoveryPending) {
+            return Err(WalletError::RecoveryAlreadyPending);
+        }
+
+        // Calculate unlock time: current ledger timestamp + 3 day delay
+        let recovery_unlock_time = env.ledger().timestamp() + RECOVERY_DELAY_SECONDS;
+
+        let pending = PendingRecovery {
+            new_public_key: new_public_key.clone(),
+            recovery_unlock_time,
+        };
+
+        env.storage().persistent().set(&DataKey::RecoveryPending, &pending);
+
+        env.events().publish(
+            (symbol_short!("recovery"), symbol_short!("init")),
+            (new_public_key, recovery_unlock_time),
+        );
+
+        Ok(())
+    }
+
+    /// Complete a pending guardian recovery after the timelock has expired.
+    ///
+    /// This function is permissionless - anyone can call it once the timelock
+    /// has expired. It replaces the wallet signer with the new public key
+    /// that was specified during `initiate_recovery`.
+    ///
+    /// # Errors
+    /// * `WalletError::RecoveryNotPending` - if no recovery has been initiated.
+    /// * `WalletError::RecoveryTimelockActive` - if the timelock has not yet expired.
+    pub fn complete_recovery(env: Env) -> Result<(), WalletError> {
+        // Retrieve pending recovery
+        let pending: PendingRecovery = env.storage()
+            .persistent()
+            .get(&DataKey::RecoveryPending)
+            .ok_or(WalletError::RecoveryNotPending)?;
+
+        // Verify timelock has expired
+        if env.ledger().timestamp() < pending.recovery_unlock_time {
+            return Err(WalletError::RecoveryTimelockActive);
+        }
+
+        // Replace the signer: store the new public key as the active signer
+        env.storage().persistent().set(
+            &DataKey::Signer,
+            &pending.new_public_key,
+        );
+
+        // Clear the pending recovery
+        env.storage().persistent().remove(&DataKey::RecoveryPending);
+
+        env.events().publish(
+            (symbol_short!("recovery"), symbol_short!("done")),
+            pending.new_public_key,
+        );
+
+        Ok(())
+    }
+
+    /// Cancel a pending guardian recovery.
+    ///
+    /// Only callable by the current wallet signer (the contract itself must
+    /// authorize). This allows a wallet owner who still has their key to
+    /// abort an unwanted or malicious recovery attempt.
+    ///
+    /// # Errors
+    /// * `WalletError::RecoveryNotPending` - if no recovery has been initiated.
+    pub fn cancel_recovery(env: Env) -> Result<(), WalletError> {
+        // Require current signer authorization
+        env.current_contract_address().require_auth();
+
+        // Verify a recovery is actually pending
+        if !env.storage().persistent().has(&DataKey::RecoveryPending) {
+            return Err(WalletError::RecoveryNotPending);
+        }
+
+        // Remove the pending recovery
+        env.storage().persistent().remove(&DataKey::RecoveryPending);
+
+        env.events().publish(
+            (symbol_short!("recovery"), symbol_short!("cancel")),
+            (),
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Env, Bytes, BytesN};
+    use soroban_sdk::{Env, Bytes, BytesN, symbol_short, Map};
     use sha2::{Sha256, Digest};
     use p256::ecdsa::{SigningKey, Signature as P256Sig, signature::hazmat::PrehashSigner};
 
@@ -238,7 +374,7 @@ mod test {
         b
     }
 
-    // ── Existing tests (updated to pass rp_id + origin to init) ──────────────
+    // â”€â”€ Existing tests (updated to pass rp_id + origin to init) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_init_registers_signer() {
@@ -322,7 +458,7 @@ mod test {
         let (auth_data_raw, challenge_b64, sig_bytes) =
             make_webauthn_fixture(&signing_key, &payload, b"localhost");
 
-        // Pass a different payload — challenge won't match
+        // Pass a different payload â€” challenge won't match
         let wrong_payload = [8u8; 32];
 
         let result = auth::verify_webauthn(
@@ -359,7 +495,7 @@ mod test {
         assert_eq!(result, Err(WalletError::SignatureVerificationFailed));
     }
 
-    // ── New tests: domain binding ─────────────────────────────────────────────
+    // â”€â”€ New tests: domain binding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// RpIdMismatch: auth_data[0..32] is SHA-256("localhost") but we store "veil.app".
     #[test]
@@ -375,7 +511,7 @@ mod test {
         let mut auth_data = [0u8; 37];
         auth_data[..32].copy_from_slice(&rp_id_hash);
 
-        // But stored rp_id is "veil.app" — different domain
+        // But stored rp_id is "veil.app" â€” different domain
         let stored_rp_id = bytes_from_str(&env, "veil.app");
 
         let auth_data_bytes = {
@@ -437,7 +573,7 @@ mod test {
         let challenge_b64 = *b"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
         let client_data_json = build_client_data_json(&env, &challenge_b64);
 
-        // clientDataJSON has origin "https://test.example" — store the same
+        // clientDataJSON has origin "https://test.example" â€” store the same
         let stored_origin = bytes_from_str(&env, "https://test.example");
 
         let result = auth::verify_origin(&client_data_json, &stored_origin);
