@@ -1,9 +1,12 @@
-use soroban_sdk::{contracttype, Bytes, Env, BytesN};
+use soroban_sdk::{contracttype, Bytes, Env, BytesN, Map};
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
+    /// Legacy single-signer key — no longer used after multi-signer migration.
     Signer(BytesN<65>),
+    /// Map<u32, BytesN<65>> of signer index → public key.
+    Signers,
     Guardian,
     /// SHA-256 preimage of the expected rpIdHash (e.g. "localhost" or "veil.app").
     /// Stored at init time; compared against auth_data[0..32] in __check_auth.
@@ -13,18 +16,58 @@ pub enum DataKey {
     Origin,
 }
 
-// ── Signer ────────────────────────────────────────────────────────────────────
+// ── Signers (Map-based) ──────────────────────────────────────────────────────
 
-pub fn add_signer(env: &Env, key: &BytesN<65>) {
-    env.storage().persistent().set(&DataKey::Signer(key.clone()), &());
+/// Initialise the signer map with a single key at index 0.
+pub fn init_signers(env: &Env, key: &BytesN<65>) {
+    let mut signers: Map<u32, BytesN<65>> = Map::new(env);
+    signers.set(0, key.clone());
+    env.storage().instance().set(&DataKey::Signers, &signers);
 }
 
-pub fn remove_signer(env: &Env, key: &BytesN<65>) {
-    env.storage().persistent().remove(&DataKey::Signer(key.clone()));
+/// Add a new signer and return its index.
+pub fn add_signer(env: &Env, key: &BytesN<65>) -> u32 {
+    let mut signers = get_signers(env);
+    let next_index = signers.len();
+    signers.set(next_index, key.clone());
+    env.storage().instance().set(&DataKey::Signers, &signers);
+    next_index
 }
 
+/// Remove a signer by index. Returns true if the signer existed and was removed.
+pub fn remove_signer(env: &Env, index: u32) -> bool {
+    let mut signers = get_signers(env);
+    if signers.contains_key(index) {
+        signers.remove(index);
+        env.storage().instance().set(&DataKey::Signers, &signers);
+        true
+    } else {
+        false
+    }
+}
+
+/// Check if any signer key matches the given public key.
 pub fn has_signer(env: &Env, key: &BytesN<65>) -> bool {
-    env.storage().persistent().has(&DataKey::Signer(key.clone()))
+    let signers = get_signers(env);
+    for (_index, stored_key) in signers.iter() {
+        if stored_key == *key {
+            return true;
+        }
+    }
+    false
+}
+
+/// Get the number of registered signers.
+pub fn signer_count(env: &Env) -> u32 {
+    get_signers(env).len()
+}
+
+/// Get the full signers map.
+pub fn get_signers(env: &Env) -> Map<u32, BytesN<65>> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Signers)
+        .unwrap_or_else(|| Map::new(env))
 }
 
 // ── Guardian ──────────────────────────────────────────────────────────────────
