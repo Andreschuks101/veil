@@ -10,7 +10,9 @@ import {
     xdr,
     nativeToScVal,
     scValToNative,
+    Networks,
 } from 'stellar-sdk';
+import { Server as HorizonServer } from 'stellar-sdk/lib/horizon';
 import {
     bufferToHex,
     hexToUint8Array,
@@ -336,10 +338,17 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             const server = new SorobanRpc.Server(rpcUrl);
 
             // ── Build transaction ─────────────────────────────────────────────
-            // The factory's `deploy` function receives the raw P-256 public key bytes
-            // and uses SHA-256(bytes) as the salt to derive the wallet address on-chain.
-            const sourceAccount = await server.getAccount(signerKeypair.publicKey());
+            // Use Horizon to load the source account — Soroban RPC's getAccount
+            // can return XDR union types that stellar-sdk v11 doesn't recognise.
+            const horizonUrl = networkPassphrase === Networks.TESTNET
+                ? 'https://horizon-testnet.stellar.org'
+                : 'https://horizon.stellar.org';
+            const horizon = new HorizonServer(horizonUrl);
+            const sourceAccount = await horizon.loadAccount(signerKeypair.publicKey());
             const factory = new Contract(factoryAddress);
+
+            const rpIdBytes  = new TextEncoder().encode(rpId ?? window.location.hostname);
+            const originBytes = new TextEncoder().encode(origin ?? window.location.origin);
 
             const tx = new TransactionBuilder(sourceAccount, {
                 fee: BASE_FEE,
@@ -348,9 +357,9 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                 .addOperation(
                     factory.call(
                         'deploy',
-                        nativeToScVal(pubKeyBytes, { type: 'bytes' }),
-                        nativeToScVal(Buffer.from(rpId ?? window.location.hostname), { type: 'bytes' }),
-                        nativeToScVal(Buffer.from(origin ?? window.location.origin), { type: 'bytes' }),
+                        nativeToScVal(pubKeyBytes,  { type: 'bytes' }),
+                        nativeToScVal(rpIdBytes,    { type: 'bytes' }),
+                        nativeToScVal(originBytes,  { type: 'bytes' }),
                     )
                 )
                 .setTimeout(30)
