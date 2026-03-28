@@ -52,11 +52,13 @@ function useInactivityLock() {
 
 // ── Dashboard page ────────────────────────────────────────────────────────────
 export default function DashboardPage() {
+  const router = useRouter()
   // Activate inactivity lock for the entire dashboard session
   useInactivityLock()
 
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
   const [balance, setBalance] = useState<string | null>(null)
+  const [balances, setBalances] = useState<any[]>([])
   const [isFunding, setIsFunding] = useState(false)
   const [fundingError, setFundingError] = useState<string | null>(null)
 
@@ -79,10 +81,12 @@ export default function DashboardPage() {
       const res = await fetch(`${horizonUrl}/accounts/${walletAddress}`)
       if (res.status === 404) {
         setBalance('0')
+        setBalances([])
         return
       }
       if (res.ok) {
         const data = await res.json()
+        setBalances(data.balances)
         const native = data.balances.find((b: any) => b.asset_type === 'native')
         setBalance(native?.balance || '0')
       }
@@ -178,14 +182,81 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Placeholder — replace with real wallet UI */}
-        <div className="card" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-          <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>
-            Wallet content goes here.
+        {/* ── Action Row ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginBottom: '2.5rem' }}>
+          <ActionButton
+            label="Send"
+            onClick={() => router.push('/send')}
+            icon={<path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>}
+          />
+          <ActionButton
+            label="Receive"
+            onClick={() => {}} // Placeholder or copy address
+            icon={<path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>}
+          />
+          <ActionButton
+            label="Swap"
+            onClick={() => router.push('/swap')}
+            icon={<path d="M7 10l5-5 5 5M17 14l-5 5-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>}
+          />
+        </div>
+
+        {/* ── Assets List ── */}
+        <div>
+          <p style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '1rem' }}>
+            ASSETS
           </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {balances.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+                <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>No assets found</p>
+              </div>
+            ) : (
+              balances.map((b, i) => (
+                <div key={i} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <p style={{ fontWeight: 600, fontSize: '1rem' }}>
+                      {b.asset_code || 'XLM'}
+                    </p>
+                    <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)' }}>
+                      {b.asset_type === 'native' ? 'Stellar' : b.asset_issuer.slice(0, 4) + '...' + b.asset_issuer.slice(-4)}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontFamily: 'Inconsolata, monospace', fontWeight: 500 }}>
+                      {parseFloat(b.balance).toLocaleString(undefined, { maximumFractionDigits: 5 })}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
       </main>
     </div>
+  )
+}
+function ActionButton({ label, onClick, icon }: { label: string; onClick: () => void; icon: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="card"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '0.625rem',
+        padding: '1.25rem 0.5rem',
+        cursor: 'pointer',
+        background: 'var(--surface)',
+        transition: 'all 0.2s ease',
+      }}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ color: 'var(--gold)' }}>
+        {icon}
+      </svg>
+      <span style={{ fontSize: '0.8125rem', fontWeight: 500 }}>{label}</span>
+    </button>
   )
 }
