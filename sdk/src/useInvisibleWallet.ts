@@ -254,11 +254,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
     // ── register ──────────────────────────────────────────────────────────────
 
-<<<<<<< HEAD
-    const register = async (username: string = 'User'): Promise<RegisterResult> => {
-=======
     const register = useCallback(async (username?: string): Promise<RegisterResult> => {
->>>>>>> pr-52
         setIsPending(true);
         setError(null);
         try {
