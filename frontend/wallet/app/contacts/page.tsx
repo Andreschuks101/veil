@@ -88,7 +88,7 @@ export default function ContactsPage() {
               </div>
 
               {error && (
-                <p style={{ fontSize: '0.8125rem', color: '#ff4b4b' }}>{error}</p>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--teal)' }}>{error}</p>
               )}
 
               <button type="submit" className="btn-gold">

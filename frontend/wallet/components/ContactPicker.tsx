@@ -32,7 +32,7 @@ export function ContactPicker({ onSelect, onClose }: ContactPickerProps) {
     }}>
       <div className="wallet-shell" style={{
         height: '80vh',
-        backgroundColor: 'var(--bg)',
+        backgroundColor: 'var(--near-black)',
         borderTopLeftRadius: '1.5rem',
         borderTopRightRadius: '1.5rem',
         display: 'flex',
