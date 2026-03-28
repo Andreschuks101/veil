@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Account,
     Contract,
@@ -33,6 +33,10 @@ export type WalletConfig = {
     rpcUrl: string;
     /** Stellar network passphrase. Use Networks.TESTNET or Networks.PUBLIC. */
     networkPassphrase: string;
+    /** The WebAuthn relying party ID (e.g. "localhost"). Optional — defaults to window.location.hostname. */
+    rpId?: string;
+    /** The WebAuthn origin (e.g. "https://veil.app"). Optional — defaults to window.location.origin. */
+    origin?: string;
 };
 
 /**
@@ -53,8 +57,8 @@ export type WebAuthnSignature = {
 export type RegisterResult = {
     /** The deterministically computed contract address of the new wallet ("C..."). */
     walletAddress: string;
-    /** The uncompressed P-256 public key (65 bytes). */
-    publicKeyBytes?: Uint8Array;
+    /** The uncompressed P-256 public key bytes (65 bytes). */
+    publicKeyBytes: Uint8Array;
 };
 
 /** Result returned by a successful deploy() call. */
@@ -72,6 +76,14 @@ export type DeployResult = {
 export type AddSignerResult = {
     /** The index of the newly added signer in the wallet's signer list. */
     signerIndex: number;
+};
+
+/** Result returned by getSigners(). */
+export type SignerInfo = {
+    /** The index of the signer in the wallet's signer list. */
+    index: number;
+    /** The hex-encoded P-256 public key of the signer. */
+    publicKey: string;
 };
 
 /** Result returned by a successful initiateRecovery() call. */
@@ -167,6 +179,12 @@ type InvisibleWallet = {
      */
     removeSigner: (signerKeypair: Keypair, signerIndex: number) => Promise<void>;
     /**
+     * Fetch the list of all registered signers from the wallet contract.
+     *
+     * @returns Array of SignerInfo objects containing index and hex public key.
+     */
+    getSigners: () => Promise<SignerInfo[]>;
+    /**
      * Set a guardian address that can initiate key recovery for this wallet.
      * Requires WebAuthn authentication — builds an auth entry, signs it with the
      * stored passkey, and submits the transaction.
@@ -236,20 +254,26 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
     // ── register ──────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
     const register = async (username: string = 'User'): Promise<RegisterResult> => {
+=======
+    const register = useCallback(async (username?: string): Promise<RegisterResult> => {
+>>>>>>> pr-52
         setIsPending(true);
         setError(null);
         try {
             const challenge = crypto.getRandomValues(new Uint8Array(32));
+            const name = username || 'Veil User';
+            const userId = username ? new TextEncoder().encode(username) : crypto.getRandomValues(new Uint8Array(16));
 
             const credential = await navigator.credentials.create({
                 publicKey: {
                     challenge,
                     rp: { name: 'Invisible Wallet' },
                     user: {
-                        id: new TextEncoder().encode(username),
-                        name: username,
-                        displayName: username,
+                        id: userId,
+                        name: name,
+                        displayName: name,
                     },
                     pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
                     timeout: 60_000,
@@ -283,11 +307,11 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [factoryAddress, networkPassphrase]);
 
     // ── deploy ────────────────────────────────────────────────────────────────
 
-    const deploy = async (
+    const deploy = useCallback(async (
         signerKeypair: Keypair,
         publicKeyBytes?: Uint8Array
     ): Promise<DeployResult> => {
@@ -387,11 +411,11 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [factoryAddress, rpcUrl, networkPassphrase]);
 
     // ── login ─────────────────────────────────────────────────────────────────
 
-    const login = async () => {
+    const login = useCallback(async () => {
         setIsPending(true);
         setError(null);
         try {
@@ -431,11 +455,11 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [rpcUrl]);
 
     // ── signAuthEntry ─────────────────────────────────────────────────────────
 
-    const signAuthEntry = async (
+    const signAuthEntry = useCallback(async (
         signaturePayload: Uint8Array
     ): Promise<WebAuthnSignature | null> => {
         setIsPending(true);
@@ -485,7 +509,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, []);
 
     // ── getNonce ──────────────────────────────────────────────────────────────
 
@@ -493,7 +517,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
      * Read the wallet contract's current nonce via simulation (read-only).
      * Does NOT submit a transaction.
      */
-    const getNonce = async (): Promise<bigint> => {
+    const getNonce = useCallback(async (): Promise<bigint> => {
         setIsPending(true);
         setError(null);
         try {
@@ -531,7 +555,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [address, rpcUrl, networkPassphrase]);
 
     // ── addSigner ─────────────────────────────────────────────────────────────
 
@@ -539,7 +563,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
      * Register an additional P-256 public key as a valid signer on the wallet.
      * Follows: simulate → build → sign → submit → poll.
      */
-    const addSigner = async (
+    const addSigner = useCallback(async (
         signerKeypair: Keypair,
         newPublicKeyBytes: Uint8Array
     ): Promise<AddSignerResult> => {
@@ -606,7 +630,61 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [address, rpcUrl, networkPassphrase]);
+
+    // ── getSigners ────────────────────────────────────────────────────────────
+
+    /**
+     * Read the full list of registered signers via simulation.
+     */
+    const getSigners = useCallback(async (): Promise<SignerInfo[]> => {
+        setIsPending(true);
+        setError(null);
+        try {
+            if (!address) throw new Error('No wallet address. Call register() or login() first.');
+
+            const server = new SorobanRpc.Server(rpcUrl);
+            const walletContract = new Contract(address);
+
+            const dummyKeypair = Keypair.random();
+            const sourceAccount = new Account(dummyKeypair.publicKey(), '0');
+
+            const tx = new TransactionBuilder(sourceAccount, {
+                fee: BASE_FEE,
+                networkPassphrase,
+            })
+                .addOperation(walletContract.call('get_signers'))
+                .setTimeout(30)
+                .build();
+
+            const sim = await server.simulateTransaction(tx);
+            if (SorobanRpc.Api.isSimulationError(sim)) {
+                throw new Error(`Simulation failed: ${sim.error}`);
+            }
+
+            const result = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
+            if (!result) throw new Error('Simulation returned no result');
+
+            const signersMap = scValToNative(result.retval) as Map<number, Uint8Array>;
+            const infos: SignerInfo[] = [];
+            
+            for (const [index, key] of signersMap.entries()) {
+                infos.push({
+                    index,
+                    publicKey: bufferToHex(key)
+                });
+            }
+
+            return infos.sort((a, b) => a.index - b.index);
+
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            setError(message);
+            throw err;
+        } finally {
+            setIsPending(false);
+        }
+    }, [address, rpcUrl, networkPassphrase]);
 
     // ── removeSigner ──────────────────────────────────────────────────────────
 
@@ -614,7 +692,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
      * Remove a signer from the wallet contract by index.
      * Follows: simulate → build → sign → submit → poll.
      */
-    const removeSigner = async (
+    const removeSigner = useCallback(async (
         signerKeypair: Keypair,
         signerIndex: number
     ): Promise<void> => {
@@ -667,7 +745,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [address, rpcUrl, networkPassphrase]);
 
     // ── setGuardian ───────────────────────────────────────────────────────────
 
@@ -675,7 +753,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
      * Set a guardian on the wallet contract. Requires WebAuthn authentication.
      * Flow: build tx → simulate → generate auth entry → sign with passkey → submit.
      */
-    const setGuardian = async (
+    const setGuardian = useCallback(async (
         signerKeypair: Keypair,
         guardianAddress: string
     ): Promise<void> => {
@@ -769,7 +847,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [address, rpcUrl, networkPassphrase, signAuthEntry]);
 
     // ── initiateRecovery ──────────────────────────────────────────────────────
 
@@ -777,7 +855,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
      * Initiate guardian-based key recovery. Signed using the guardian's Stellar keypair.
      * Uses standard Transaction.sign() — no WebAuthn required.
      */
-    const initiateRecovery = async (
+    const initiateRecovery = useCallback(async (
         guardianKeypair: Keypair,
         newPublicKeyBytes: Uint8Array
     ): Promise<InitiateRecoveryResult> => {
@@ -850,7 +928,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [address, rpcUrl, networkPassphrase]);
 
     // ── completeRecovery ──────────────────────────────────────────────────────
 
@@ -858,7 +936,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
      * Complete a pending guardian recovery. Permissionless — any keypair can submit.
      * Fails gracefully if the timelock has not expired or no recovery is pending.
      */
-    const completeRecovery = async (payerKeypair: Keypair): Promise<void> => {
+    const completeRecovery = useCallback(async (payerKeypair: Keypair): Promise<void> => {
         setIsPending(true);
         setError(null);
         try {
@@ -923,7 +1001,9 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
         } finally {
             setIsPending(false);
         }
-    };
+    }, [address, rpcUrl, networkPassphrase]);
 
-    return { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, setGuardian, initiateRecovery, completeRecovery };
+    return useMemo(() => (
+        { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery }
+    ), [address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery]);
 }

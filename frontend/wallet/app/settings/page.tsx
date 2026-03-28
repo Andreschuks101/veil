@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Keypair } from 'stellar-sdk'
 import { VeilLogo } from '@/components/VeilLogo'
-import { useInvisibleWallet } from '@veil/sdk'
+import { useInvisibleWallet, type SignerInfo } from '@veil/sdk'
 
 const CONFIG = {
   rpcUrl: 'https://soroban-testnet.stellar.org',
@@ -21,6 +21,9 @@ export default function SettingsPage() {
   const [status, setStatus] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  const [signers, setSigners] = useState<SignerInfo[]>([])
+  const [localPublicKey, setLocalPublicKey] = useState<string | null>(null)
+
   // Guardian form
   const [guardianAddress, setGuardianAddress] = useState('')
 
@@ -31,6 +34,24 @@ export default function SettingsPage() {
     if (!addr) { router.replace('/'); return }
     setAddress(addr)
   }, [router])
+
+  const fetchSigners = useCallback(async () => {
+    try {
+      const list = await wallet.getSigners();
+      setSigners(list)
+    } catch (e) {
+      console.error('Failed to fetch signers', e)
+    }
+  }, [wallet.getSigners]);
+
+  useEffect(() => {
+    if (address && section === 'overview') {
+      fetchSigners()
+    }
+    if (typeof window !== 'undefined') {
+      setLocalPublicKey(localStorage.getItem('invisible_wallet_public_key'))
+    }
+  }, [address, section, fetchSigners])
 
   function getSignerKeypair(): Keypair {
     const secret = sessionStorage.getItem('veil_signer_secret')
@@ -48,6 +69,23 @@ export default function SettingsPage() {
       if (!result?.publicKeyBytes) throw new Error('Registration returned no public key')
       const res = await wallet.addSigner(signerKeypair, result.publicKeyBytes)
       setStatus(`New signer added at index ${res.signerIndex}`)
+      await fetchSigners()
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleRemoveSigner(index: number) {
+    if (signers.length <= 1) return
+    setLoading(true)
+    setStatus(null)
+    try {
+      const signerKeypair = getSignerKeypair()
+      await wallet.removeSigner(signerKeypair, index)
+      setStatus(`Signer #${index} removed`)
+      await fetchSigners()
     } catch (err: unknown) {
       setStatus(err instanceof Error ? err.message : String(err))
     } finally {
@@ -153,6 +191,7 @@ export default function SettingsPage() {
                 </div>
               </button>
 
+<<<<<<< HEAD
               {/* Address Book card */}
               <button
                 className="card"
@@ -171,6 +210,47 @@ export default function SettingsPage() {
                   </svg>
                 </div>
               </button>
+=======
+              {/* Signers list */}
+              <div style={{ marginTop: '2rem' }}>
+                <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em', marginBottom: '0.625rem' }}>
+                  REGISTERED SIGNERS
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                  {signers.map(s => {
+                    const isThisDevice = localPublicKey === s.publicKey
+                    const truncated = `0x${s.publicKey.slice(0, 12)}...${s.publicKey.slice(-8)}`
+                    return (
+                      <div key={s.index} className="card-md" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--off-white)' }}>
+                              #{s.index}
+                            </p>
+                            {isThisDevice && (
+                              <span style={{ fontSize: '0.625rem', background: 'rgba(94, 234, 212, 0.1)', color: 'var(--teal)', padding: '0.125rem 0.375rem', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+                                This device
+                              </span>
+                            )}
+                          </div>
+                          <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.25rem' }}>
+                            {truncated}
+                          </p>
+                        </div>
+                        
+                        <button 
+                          onClick={() => handleRemoveSigner(s.index)}
+                          disabled={loading || signers.length <= 1}
+                          style={{ background: 'none', border: 'none', color: signers.length <= 1 ? 'rgba(246,247,248,0.1)' : 'var(--teal)', fontSize: '0.75rem', cursor: signers.length <= 1 ? 'not-allowed' : 'pointer', textDecoration: 'underline' }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+>>>>>>> pr-52
             </div>
           </>
         )}

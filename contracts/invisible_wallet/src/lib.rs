@@ -50,11 +50,11 @@ pub struct InvisibleWallet;
 impl InvisibleWallet {
     /// Initialise the wallet with its first signer and domain-binding parameters.
     ///
-    /// `rp_id`   â€" the WebAuthn relying party ID (e.g. `"localhost"` for dev,
+    /// `rp_id`   - the WebAuthn relying party ID (e.g. `"localhost"` for dev,
     ///             `"veil.app"` for production). Must match the domain that
-    ///             serves the frontend. Keep it configurable â€" do not hardcode.
+    ///             serves the frontend. Keep it configurable - do not hardcode.
     ///
-    /// `origin`  â€" the exact WebAuthn origin (e.g. `"https://veil.app"`).
+    /// `origin`  - the exact WebAuthn origin (e.g. `"https://veil.app"`).
     ///             Must match the `origin` field the browser embeds in every
     ///             clientDataJSON for this deployment.
     pub fn init(
@@ -99,17 +99,17 @@ impl InvisibleWallet {
     /// Called by the Soroban runtime to authorize a transaction.
     ///
     /// The `signature` Val must encode a Vec<Val> with 4 elements:
-    ///   [0] BytesN<65>  â€" uncompressed P-256 public key (0x04 || x || y)
-    ///   [1] Bytes       â€" WebAuthn authenticatorData
-    ///   [2] Bytes       â€" WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
-    ///   [3] BytesN<64>  â€" raw P-256 ECDSA signature (r || s)
+    ///   [0] BytesN<65>  - uncompressed P-256 public key (0x04 || x || y)
+    ///   [1] Bytes       - WebAuthn authenticatorData
+    ///   [2] Bytes       - WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
+    ///   [3] BytesN<64>  - raw P-256 ECDSA signature (r || s)
     ///
     /// Verification order:
     ///   1. Parse and validate signature format
     ///   2. Check signer is registered (iterates all signers, short-circuits on first match)
     ///   3. Verify ECDSA signature + challenge binding  (`verify_webauthn`)
-    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    â†' RpIdMismatch
-    ///   5. Verify origin binding                      (`verify_origin`)   â†' OriginMismatch
+    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    -> RpIdMismatch
+    ///   5. Verify origin binding                      (`verify_origin`)   -> OriginMismatch
     ///
     /// Steps 4 and 5 run after step 3 so that a bad domain does not produce
     /// a faster failure path than a bad signature (timing side-channel).
@@ -168,6 +168,10 @@ impl InvisibleWallet {
 
     pub fn has_signer(env: Env, key: BytesN<65>) -> bool {
         storage::has_signer(&env, &key)
+    }
+
+    pub fn get_signers(env: Env) -> Map<u32, BytesN<65>> {
+        storage::get_signers(&env)
     }
 
     pub fn execute(env: Env, target: Address, func: Symbol, args: Vec<Val>) {
