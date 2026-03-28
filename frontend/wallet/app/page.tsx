@@ -23,6 +23,12 @@ export default function OnboardingPage() {
   const [showTutorial, setShowTutorial] = useState(false)
 
   useEffect(() => {
+    // If a wallet already exists, go straight to the lock/unlock screen
+    const existingWallet = localStorage.getItem('invisible_wallet_address')
+    if (existingWallet) {
+      router.replace('/lock')
+      return
+    }
     const seen = localStorage.getItem('veil_seen_tutorial')
     if (!seen) {
       setShowTutorial(true)
