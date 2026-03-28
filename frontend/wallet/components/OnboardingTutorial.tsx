@@ -109,7 +109,7 @@ export function OnboardingTutorial({ onComplete }: OnboardingTutorialProps) {
             <button className="btn-gold" onClick={handleNext}>
               {step === steps.length - 1 ? 'Get started' : 'Next'}
             </button>
-            {step === 0 && (
+            {step < steps.length - 1 && (
               <button className="btn-ghost" style={{ fontSize: '0.875rem', opacity: 0.5 }} onClick={onComplete}>
                 Skip
               </button>

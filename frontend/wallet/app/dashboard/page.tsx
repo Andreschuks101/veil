@@ -143,8 +143,8 @@ export default function DashboardPage() {
 
         {/* ── Balance Display ── */}
         <div style={{ marginBottom: '3rem' }}>
-          <p style={{ fontSize: '0.75rem', color: 'var(--warm-grey)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
-            Available Balance
+          <p style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
+            AVAILABLE BALANCE
           </p>
           <div style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '2.5rem', color: 'var(--off-white)' }}>
             {balance !== null 
@@ -170,7 +170,7 @@ export default function DashboardPage() {
               </button>
 
               {fundingError && (
-                <p style={{ color: '#ff4d4d', fontSize: '0.75rem', marginTop: '0.75rem' }}>
+                <p style={{ color: 'var(--teal)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
                   {fundingError}
                 </p>
               )}
