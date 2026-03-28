@@ -2,10 +2,8 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Keypair } from 'stellar-sdk'
 import { VeilLogo } from '@/components/VeilLogo'
 import { useInvisibleWallet } from '@veil/sdk'
-import { computeWalletAddress } from '@veil/utils'
 
 const CONFIG = {
   rpcUrl: 'https://soroban-testnet.stellar.org',
@@ -30,9 +28,11 @@ export default function RecoverPage() {
       const result = await wallet.login()
       if (!result?.walletAddress) throw new Error('Could not derive wallet address from passkey')
 
-      const signerKeypair = Keypair.random()
-      sessionStorage.setItem('veil_address', result.walletAddress)
-      sessionStorage.setItem('veil_signer_secret', signerKeypair.secret())
+      // The signer secret stored during initial wallet creation is needed to authorise
+      // future transactions. login() re-derives the wallet address from the passkey but
+      // cannot recover the original signer secret — the user must have it persisted.
+      // For now we restore the wallet address so the dashboard loads correctly.
+      sessionStorage.setItem('invisible_wallet_address', result.walletAddress)
 
       setStep('done')
       setTimeout(() => router.push('/dashboard'), 800)
