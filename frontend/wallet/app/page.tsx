@@ -45,6 +45,13 @@ export default function OnboardingPage() {
 
       setStep('deploying')
       const signerKeypair = Keypair.random()
+
+      // Fund the fee-payer keypair via Friendbot before deploying on testnet
+      const friendbotRes = await fetch(
+        `https://friendbot.stellar.org/?addr=${signerKeypair.publicKey()}`
+      )
+      if (!friendbotRes.ok) throw new Error('Friendbot funding failed — try again')
+
       const deployed = await wallet.deploy(signerKeypair)
 
       setAddress(deployed.walletAddress)

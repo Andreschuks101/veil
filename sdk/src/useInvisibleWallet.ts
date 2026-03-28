@@ -348,8 +348,13 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             } catch (e: unknown) {
                 // Only proceed if the entry was genuinely absent.
                 // Any other error (network failure, RPC down) should bubble up.
-                const msg = e instanceof Error ? e.message : String(e);
-                if (!msg.toLowerCase().includes('not found')) throw e;
+                let msg: string;
+                if (e instanceof Error) {
+                    msg = e.message;
+                } else {
+                    try { msg = JSON.stringify(e); } catch { msg = String(e); }
+                }
+                if (!msg.toLowerCase().includes('not found') && !msg.toLowerCase().includes('404')) throw e;
             }
 
             // ── Build transaction ─────────────────────────────────────────────
@@ -401,9 +406,14 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             return { walletAddress, alreadyDeployed: false };
 
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
+            let message: string;
+            if (err instanceof Error) {
+                message = err.message;
+            } else {
+                try { message = JSON.stringify(err); } catch { message = String(err); }
+            }
             setError(message);
-            throw err;
+            throw new Error(message);
         } finally {
             setIsPending(false);
         }
